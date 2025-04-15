@@ -48,3 +48,69 @@
   { user: principal }
   { approved: bool, expiry-height: uint }
 )
+;; Property governance proposals
+(define-map governance-proposals
+  { property-id: uint, proposal-id: uint }
+  {
+    title: (string-ascii 100),
+    description: (string-ascii 500),
+    proposer: principal,
+    proposal-type: (string-ascii 20),
+    start-block-height: uint,
+    end-block-height: uint,
+    executed: bool,
+    votes-for: uint,
+    votes-against: uint
+  }
+)
+
+;; Voting records
+(define-map vote-records
+  { property-id: uint, proposal-id: uint, voter: principal }
+  { voted: bool, vote-count: uint, support: bool }
+)
+
+;; Secondary market listings
+(define-map marketplace-listings
+  { listing-id: uint }
+  {
+    seller: principal,
+    property-id: uint,
+    token-count: uint,
+    price-per-token: uint,
+    active: bool
+  }
+)
+
+;; Counter for proposal IDs
+(define-data-var next-proposal-id uint u1)
+
+;; Counter for listing IDs
+(define-data-var next-listing-id uint u1)
+
+;; Counter for property IDs
+(define-data-var next-property-id uint u1)
+
+;; Getters
+
+(define-read-only (get-property (property-id uint))
+  (map-get? properties { property-id: property-id })
+)
+
+(define-read-only (get-token-balance (property-id uint) (owner principal))
+  (default-to u0 
+    (get token-count 
+      (map-get? token-ownership { property-id: property-id, owner: owner })
+    )
+  )
+)
+
+(define-read-only (get-property-total-tokens (property-id uint))
+  (get total-tokens 
+    (unwrap! (map-get? properties { property-id: property-id }) (err err-property-not-found))
+  )
+)
+
+(define-read-only (get-proposal (property-id uint) (proposal-id uint))
+  (map-get? governance-proposals { property-id: property-id, proposal-id: proposal-id })
+)
