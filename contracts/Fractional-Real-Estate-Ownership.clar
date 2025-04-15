@@ -227,3 +227,85 @@
       ) 
       err-kyc-required
     )
+    ;; Update sender balance
+    (map-set token-ownership
+      { property-id: property-id, owner: tx-sender }
+      { token-count: (- sender-balance amount) }
+    )
+    
+    ;; Update recipient balance
+    (map-set token-ownership
+      { property-id: property-id, owner: recipient }
+      { 
+        token-count: (+ (get-token-balance property-id recipient) amount) 
+      }
+    )
+    
+    (ok true)
+  )
+)
+
+;; Rent Distribution
+
+(define-public (distribute-rent (property-id uint) (rent-amount uint))
+  (let (
+    (property (unwrap! (get-property property-id) err-property-not-found))
+    (total-tokens (get total-tokens property))
+  )
+    ;; Only contract owner can distribute rent
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    ;; Update last rent collection timestamp
+    (map-set properties 
+      { property-id: property-id }
+      (merge property { last-rent-collection-height: block-height })
+    )
+    
+    ;; We would distribute the rent here, but since we can't iterate through all token holders
+    ;; in Clarity, we would need a different approach or an off-chain component to trigger
+    ;; individual rent distribution transactions
+    
+    ;; For demonstration purposes, we'll just acknowledge the rent distribution
+    (ok true)
+  )
+)
+
+;; Function for token holders to claim their rent
+(define-public (claim-rent (property-id uint))
+  (let (
+    (property (unwrap! (get-property property-id) err-property-not-found))
+    (token-balance (get-token-balance property-id tx-sender))
+    (total-tokens (get total-tokens property))
+  )
+    ;; Ensure user has tokens
+    (asserts! (> token-balance u0) err-insufficient-tokens)
+    
+    ;; In a real implementation, this would calculate and transfer the claimable rent
+    ;; based on the token balance and rent collected
+    
+    (ok token-balance)
+  )
+)
+
+;; Governance Functions
+
+(define-public (create-proposal 
+  (property-id uint) 
+  (title (string-ascii 100)) 
+  (description (string-ascii 500)) 
+  (proposal-type (string-ascii 20))
+  (voting-period uint)
+)
+  (let (
+    (proposal-id (var-get next-proposal-id))
+    (token-balance (get-token-balance property-id tx-sender))
+  )
+    ;; Check if property exists
+    (asserts! (is-some (get-property property-id)) err-property-not-found)
+    
+    ;; Ensure proposer has tokens
+    (asserts! (> token-balance u0) err-insufficient-tokens)
+    
+    ;; Create proposal
+    (map-set governance-proposals
+      { property-id: property-id, proposal-id: proposal-id }
