@@ -227,3 +227,264 @@
       ) 
       err-kyc-required
     )
+    ;; Update sender balance
+    (map-set token-ownership
+      { property-id: property-id, owner: tx-sender }
+      { token-count: (- sender-balance amount) }
+    )
+    
+    ;; Update recipient balance
+    (map-set token-ownership
+      { property-id: property-id, owner: recipient }
+      { 
+        token-count: (+ (get-token-balance property-id recipient) amount) 
+      }
+    )
+    
+    (ok true)
+  )
+)
+
+;; Rent Distribution
+
+(define-public (distribute-rent (property-id uint) (rent-amount uint))
+  (let (
+    (property (unwrap! (get-property property-id) err-property-not-found))
+    (total-tokens (get total-tokens property))
+  )
+    ;; Only contract owner can distribute rent
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    ;; Update last rent collection timestamp
+    (map-set properties 
+      { property-id: property-id }
+      (merge property { last-rent-collection-height: block-height })
+    )
+    
+    ;; We would distribute the rent here, but since we can't iterate through all token holders
+    ;; in Clarity, we would need a different approach or an off-chain component to trigger
+    ;; individual rent distribution transactions
+    
+    ;; For demonstration purposes, we'll just acknowledge the rent distribution
+    (ok true)
+  )
+)
+
+;; Function for token holders to claim their rent
+(define-public (claim-rent (property-id uint))
+  (let (
+    (property (unwrap! (get-property property-id) err-property-not-found))
+    (token-balance (get-token-balance property-id tx-sender))
+    (total-tokens (get total-tokens property))
+  )
+    ;; Ensure user has tokens
+    (asserts! (> token-balance u0) err-insufficient-tokens)
+    
+    ;; In a real implementation, this would calculate and transfer the claimable rent
+    ;; based on the token balance and rent collected
+    
+    (ok token-balance)
+  )
+)
+
+;; Governance Functions
+
+(define-public (create-proposal 
+  (property-id uint) 
+  (title (string-ascii 100)) 
+  (description (string-ascii 500)) 
+  (proposal-type (string-ascii 20))
+  (voting-period uint)
+)
+  (let (
+    (proposal-id (var-get next-proposal-id))
+    (token-balance (get-token-balance property-id tx-sender))
+  )
+    ;; Check if property exists
+    (asserts! (is-some (get-property property-id)) err-property-not-found)
+    
+    ;; Ensure proposer has tokens
+    (asserts! (> token-balance u0) err-insufficient-tokens)
+    
+    ;; Create proposal
+    (map-set governance-proposals
+      { property-id: property-id, proposal-id: proposal-id }
+      {
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        proposal-type: proposal-type,
+        start-block-height: block-height,
+        end-block-height: (+ block-height voting-period),
+        executed: false,
+        votes-for: u0,
+        votes-against: u0
+      }
+    )
+    
+    ;; Increment proposal ID counter
+    (var-set next-proposal-id (+ proposal-id u1))
+    
+    (ok proposal-id)
+  )
+)
+
+(define-public (vote-on-proposal (property-id uint) (proposal-id uint) (support bool))
+  (let (
+    (proposal (unwrap! (get-proposal property-id proposal-id) (err u106)))
+    (token-balance (get-token-balance property-id tx-sender))
+    (vote-record (map-get? vote-records { property-id: property-id, proposal-id: proposal-id, voter: tx-sender }))
+  )
+    ;; Ensure voting is still open
+    (asserts! (< block-height (get end-block-height proposal)) err-voting-closed)
+    
+    ;; Ensure voter has tokens
+    (asserts! (> token-balance u0) err-insufficient-tokens)
+    
+    ;; Ensure voter hasn't already voted
+    (asserts! (or (is-none vote-record) (not (get voted (default-to { voted: false, vote-count: u0, support: false } vote-record)))) err-already-voted)
+    
+    ;; Record vote
+    (map-set vote-records
+      { property-id: property-id, proposal-id: proposal-id, voter: tx-sender }
+      { voted: true, vote-count: token-balance, support: support }
+    )
+    
+    ;; Update proposal vote counts
+    (map-set governance-proposals
+      { property-id: property-id, proposal-id: proposal-id }
+      (merge proposal {
+        votes-for: (if support (+ (get votes-for proposal) token-balance) (get votes-for proposal)),
+        votes-against: (if support (get votes-against proposal) (+ (get votes-against proposal) token-balance))
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (execute-proposal (property-id uint) (proposal-id uint))
+  (let (
+    (proposal (unwrap! (get-proposal property-id proposal-id) (err u106)))
+  )
+    ;; Only contract owner can execute proposals for now
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    ;; Ensure voting period is over
+    (asserts! (>= block-height (get end-block-height proposal)) (err u113))
+    
+    ;; Ensure proposal hasn't been executed
+    (asserts! (not (get executed proposal)) (err u114))
+    
+    ;; Mark proposal as executed
+    (map-set governance-proposals
+      { property-id: property-id, proposal-id: proposal-id }
+      (merge proposal { executed: true })
+    )
+    
+    ;; In a real implementation, we would execute different actions based on proposal type
+    ;; For now, we just mark it as executed
+    
+    (ok true)
+  )
+)
+
+;; Secondary Market Functions
+
+(define-public (create-listing (property-id uint) (token-count uint) (price-per-token uint))
+  (let (
+    (listing-id (var-get next-listing-id))
+    (token-balance (get-token-balance property-id tx-sender))
+  )
+    ;; Ensure seller has enough tokens
+    (asserts! (>= token-balance token-count) err-insufficient-tokens)
+    ;; Ensure valid price
+    (asserts! (> price-per-token u0) err-invalid-price)
+    
+    ;; Create listing
+    (map-set marketplace-listings
+      { listing-id: listing-id }
+      {
+        seller: tx-sender,
+        property-id: property-id,
+        token-count: token-count,
+        price-per-token: price-per-token,
+        active: true
+      }
+    )
+    
+    ;; Increment listing ID counter
+    (var-set next-listing-id (+ listing-id u1))
+    
+    (ok listing-id)
+  )
+)
+
+(define-public (cancel-listing (listing-id uint))
+  (let (
+    (listing (unwrap! (get-marketplace-listing listing-id) err-listing-not-found))
+  )
+    ;; Ensure sender is the seller
+    (asserts! (is-eq tx-sender (get seller listing)) err-not-authorized)
+    
+    ;; Mark listing as inactive
+    (map-set marketplace-listings
+      { listing-id: listing-id }
+      (merge listing { active: false })
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (purchase-listing (listing-id uint))
+  (let (
+    (listing (unwrap! (get-marketplace-listing listing-id) err-listing-not-found))
+    (property-id (get property-id listing))
+    (token-count (get token-count listing))
+    (price-per-token (get price-per-token listing))
+    (seller (get seller listing))
+    (property (unwrap! (get-property property-id) err-property-not-found))
+    (total-price (* token-count price-per-token))
+  )
+    ;; Ensure listing is active
+    (asserts! (get active listing) (err u115))
+    
+    ;; Check KYC requirements
+    (asserts! 
+      (or 
+        (not (get kyc-required property))
+        (and 
+          (is-kyc-valid tx-sender)
+          (is-kyc-valid seller)
+        )
+      ) 
+      err-kyc-required
+    )
+    
+    ;; In a real implementation, we would handle the STX payment here
+    ;; For this demo, we assume payment is handled and directly transfer tokens
+    
+    ;; Transfer tokens from seller to buyer
+    (map-set token-ownership
+      { property-id: property-id, owner: seller }
+      { token-count: (- (get-token-balance property-id seller) token-count) }
+    )
+    
+    (map-set token-ownership
+      { property-id: property-id, owner: tx-sender }
+      { token-count: (+ (get-token-balance property-id tx-sender) token-count) }
+    )
+    
+    ;; Mark listing as inactive
+    (map-set marketplace-listings
+      { listing-id: listing-id }
+      (merge listing { active: false })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Initialize the contract with the deployer as the owner
+;
