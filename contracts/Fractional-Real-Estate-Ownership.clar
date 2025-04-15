@@ -309,3 +309,92 @@
     ;; Create proposal
     (map-set governance-proposals
       { property-id: property-id, proposal-id: proposal-id }
+      {
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        proposal-type: proposal-type,
+        start-block-height: block-height,
+        end-block-height: (+ block-height voting-period),
+        executed: false,
+        votes-for: u0,
+        votes-against: u0
+      }
+    )
+    
+    ;; Increment proposal ID counter
+    (var-set next-proposal-id (+ proposal-id u1))
+    
+    (ok proposal-id)
+  )
+)
+
+(define-public (vote-on-proposal (property-id uint) (proposal-id uint) (support bool))
+  (let (
+    (proposal (unwrap! (get-proposal property-id proposal-id) (err u106)))
+    (token-balance (get-token-balance property-id tx-sender))
+    (vote-record (map-get? vote-records { property-id: property-id, proposal-id: proposal-id, voter: tx-sender }))
+  )
+    ;; Ensure voting is still open
+    (asserts! (< block-height (get end-block-height proposal)) err-voting-closed)
+    
+    ;; Ensure voter has tokens
+    (asserts! (> token-balance u0) err-insufficient-tokens)
+    
+    ;; Ensure voter hasn't already voted
+    (asserts! (or (is-none vote-record) (not (get voted (default-to { voted: false, vote-count: u0, support: false } vote-record)))) err-already-voted)
+    
+    ;; Record vote
+    (map-set vote-records
+      { property-id: property-id, proposal-id: proposal-id, voter: tx-sender }
+      { voted: true, vote-count: token-balance, support: support }
+    )
+    
+    ;; Update proposal vote counts
+    (map-set governance-proposals
+      { property-id: property-id, proposal-id: proposal-id }
+      (merge proposal {
+        votes-for: (if support (+ (get votes-for proposal) token-balance) (get votes-for proposal)),
+        votes-against: (if support (get votes-against proposal) (+ (get votes-against proposal) token-balance))
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (execute-proposal (property-id uint) (proposal-id uint))
+  (let (
+    (proposal (unwrap! (get-proposal property-id proposal-id) (err u106)))
+  )
+    ;; Only contract owner can execute proposals for now
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    ;; Ensure voting period is over
+    (asserts! (>= block-height (get end-block-height proposal)) (err u113))
+    
+    ;; Ensure proposal hasn't been executed
+    (asserts! (not (get executed proposal)) (err u114))
+    
+    ;; Mark proposal as executed
+    (map-set governance-proposals
+      { property-id: property-id, proposal-id: proposal-id }
+      (merge proposal { executed: true })
+    )
+    
+    ;; In a real implementation, we would execute different actions based on proposal type
+    ;; For now, we just mark it as executed
+    
+    (ok true)
+  )
+)
+
+;; Secondary Market Functions
+
+(define-public (create-listing (property-id uint) (token-count uint) (price-per-token uint))
+  (let (
+    (listing-id (var-get next-listing-id))
+    (token-balance (get-token-balance property-id tx-sender))
+  )
+    ;; Ensure seller has enough tokens
+    (asserts! (>= token-balance token-count) err-insufficient-tokens)
