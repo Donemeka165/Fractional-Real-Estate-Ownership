@@ -398,3 +398,93 @@
   )
     ;; Ensure seller has enough tokens
     (asserts! (>= token-balance token-count) err-insufficient-tokens)
+    ;; Ensure valid price
+    (asserts! (> price-per-token u0) err-invalid-price)
+    
+    ;; Create listing
+    (map-set marketplace-listings
+      { listing-id: listing-id }
+      {
+        seller: tx-sender,
+        property-id: property-id,
+        token-count: token-count,
+        price-per-token: price-per-token,
+        active: true
+      }
+    )
+    
+    ;; Increment listing ID counter
+    (var-set next-listing-id (+ listing-id u1))
+    
+    (ok listing-id)
+  )
+)
+
+(define-public (cancel-listing (listing-id uint))
+  (let (
+    (listing (unwrap! (get-marketplace-listing listing-id) err-listing-not-found))
+  )
+    ;; Ensure sender is the seller
+    (asserts! (is-eq tx-sender (get seller listing)) err-not-authorized)
+    
+    ;; Mark listing as inactive
+    (map-set marketplace-listings
+      { listing-id: listing-id }
+      (merge listing { active: false })
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (purchase-listing (listing-id uint))
+  (let (
+    (listing (unwrap! (get-marketplace-listing listing-id) err-listing-not-found))
+    (property-id (get property-id listing))
+    (token-count (get token-count listing))
+    (price-per-token (get price-per-token listing))
+    (seller (get seller listing))
+    (property (unwrap! (get-property property-id) err-property-not-found))
+    (total-price (* token-count price-per-token))
+  )
+    ;; Ensure listing is active
+    (asserts! (get active listing) (err u115))
+    
+    ;; Check KYC requirements
+    (asserts! 
+      (or 
+        (not (get kyc-required property))
+        (and 
+          (is-kyc-valid tx-sender)
+          (is-kyc-valid seller)
+        )
+      ) 
+      err-kyc-required
+    )
+    
+    ;; In a real implementation, we would handle the STX payment here
+    ;; For this demo, we assume payment is handled and directly transfer tokens
+    
+    ;; Transfer tokens from seller to buyer
+    (map-set token-ownership
+      { property-id: property-id, owner: seller }
+      { token-count: (- (get-token-balance property-id seller) token-count) }
+    )
+    
+    (map-set token-ownership
+      { property-id: property-id, owner: tx-sender }
+      { token-count: (+ (get-token-balance property-id tx-sender) token-count) }
+    )
+    
+    ;; Mark listing as inactive
+    (map-set marketplace-listings
+      { listing-id: listing-id }
+      (merge listing { active: false })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Initialize the contract with the deployer as the owner
+;
