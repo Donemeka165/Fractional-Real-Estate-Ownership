@@ -114,3 +114,116 @@
 (define-read-only (get-proposal (property-id uint) (proposal-id uint))
   (map-get? governance-proposals { property-id: property-id, proposal-id: proposal-id })
 )
+(define-read-only (get-marketplace-listing (listing-id uint))
+  (map-get? marketplace-listings { listing-id: listing-id })
+)
+
+(define-read-only (get-user-kyc-status (user principal))
+  (default-to { approved: false, expiry-height: u0 }
+    (map-get? kyc-approved { user: user })
+  )
+)
+
+(define-read-only (is-kyc-valid (user principal))
+  (let ((kyc-info (get-user-kyc-status user)))
+    (and 
+      (get approved kyc-info)
+      (< block-height (get expiry-height kyc-info))
+    )
+  )
+)
+
+;; Property Management Functions
+
+(define-public (register-property (name (string-ascii 100)) (location (string-ascii 100)) (total-tokens uint) (valuation uint) (rent-period uint) (kyc-required bool))
+  (let ((property-id (var-get next-property-id)))
+    ;; Only contract owner can register properties
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> total-tokens u0) (err u111))
+    (asserts! (> valuation u0) (err u112))
+    
+    ;; Register the property
+    (map-set properties 
+      { property-id: property-id }
+      {
+        property-name: name,
+        location: location,
+        total-tokens: total-tokens,
+        valuation: valuation,
+        rent-period-days: rent-period,
+        last-rent-collection-height: block-height,
+        kyc-required: kyc-required,
+        active: true
+      }
+    )
+    
+    ;; Assign all tokens to contract owner initially
+    (map-set token-ownership
+      { property-id: property-id, owner: contract-owner }
+      { token-count: total-tokens }
+    )
+    
+    ;; Increment property ID counter
+    (var-set next-property-id (+ property-id u1))
+    
+    (ok property-id)
+  )
+)
+
+(define-public (update-property-valuation (property-id uint) (new-valuation uint))
+  (let ((property (unwrap! (get-property property-id) err-property-not-found)))
+    ;; Only contract owner can update valuation
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> new-valuation u0) (err u112))
+    
+    ;; Update the property valuation
+    (map-set properties 
+      { property-id: property-id }
+      (merge property { valuation: new-valuation })
+    )
+    
+    (ok true)
+  )
+)
+
+;; KYC Management
+
+(define-public (set-kyc-approval (user principal) (approved bool) (expiry-blocks uint))
+  (begin
+    ;; Only contract owner can set KYC status
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    ;; Set KYC status
+    (map-set kyc-approved
+      { user: user }
+      { 
+        approved: approved, 
+        expiry-height: (+ block-height expiry-blocks)
+      }
+    )
+    
+    (ok true)
+  )
+)
+
+;; Token Transfer Functions
+
+(define-public (transfer-tokens (property-id uint) (recipient principal) (amount uint))
+  (let (
+    (sender-balance (get-token-balance property-id tx-sender))
+    (property (unwrap! (get-property property-id) err-property-not-found))
+  )
+    ;; Check if sender has enough tokens
+    (asserts! (>= sender-balance amount) err-insufficient-tokens)
+    
+    ;; Check KYC requirements
+    (asserts! 
+      (or 
+        (not (get kyc-required property))
+        (and 
+          (is-kyc-valid tx-sender)
+          (is-kyc-valid recipient)
+        )
+      ) 
+      err-kyc-required
+    )
